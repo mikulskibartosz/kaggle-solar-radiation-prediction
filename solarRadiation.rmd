@@ -1,0 +1,108 @@
+---
+title: "Solar Radiation Prediction"
+author: "Bartosz Mikulski"
+date: "May 24, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dataset
+URL: https://www.kaggle.com/dronio/SolarEnergy
+
+Description:
+The dataset contains such columns as: "wind direction", "wind speed", "humidity" and temperature. The response parameter that is to be predicted is: "Solar_radiation". It contains measurements for the past 4 months and you have to predict the level of solar radiation. Just imagine that you've got solar energy batteries and you want to know will it be reasonable to use them in future?
+
+These datasets are meteorological data from the HI-SEAS weather station from four months (September through December 2016) between Mission IV and Mission V.
+
+For each dataset, the fields are:
+
+A row number (1-n) useful in sorting this export's results The UNIX time_t date (seconds since Jan 1, 1970). Useful in sorting this export's results with other export's results The date in yyyy-mm-dd format The local time of day in hh:mm:ss 24-hour format The numeric data, if any (may be an empty string) The text data, if any (may be an empty string)
+
+The units of each dataset are:
+
+Solar radiation: watts per meter^2
+Temperature: degrees Fahrenheit
+Humidity: percent
+Barometric pressure: Hg
+Wind direction: degrees
+Wind speed: miles per hour
+Sunrise/sunset: Hawaii time
+
+# Plan
+* in the first attempts I am going to ignore all time variables
+* wind direction degrees will be converted to the directions and encoded using one-hot encoding
+
+# Preprocessing
+
+```{r}
+fileName <- "SolarPrediction.csv"
+data <- read.csv(fileName)
+
+# remove time variables
+data <- subset(data, select = -c(UNIXTime, Data, Time, TimeSunRise, TimeSunSet))
+
+# convert degrees to directions
+data$WindDirection.Degrees. <- data$WindDirection.Degrees. - 22.5
+data$WindDirection <- cut(
+  data$WindDirection.Degrees.,
+  breaks = c(-22.5, 22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5),
+  labels = c("N", "NE", "E", "SE", "S", "SW", "W", "NW"),
+  right = TRUE
+  )
+data <- subset(data, select = -c(WindDirection.Degrees.))
+
+# one-hot encoding of wind direction
+data <- with(data,
+  data.frame(
+    model.matrix(~WindDirection-1, data),
+    Radiation,
+    Temperature,
+    Pressure,
+    Humidity,
+    Speed
+  )
+)
+
+# removing redundant variable ('true' encoded as all other variables set to 'false')
+data <- subset(data, select = -c(WindDirectionN))
+
+# capping outliers
+capOutliers <- function(x) {
+  qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+  caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+  H <- 1.5 * IQR(x, na.rm = T)
+  x[x < (qnt[1] - H)] <- caps[1]
+  x[x > (qnt[2] + H)] <- caps[2]
+  x
+}
+
+data$Radiation <- capOutliers(data$Radiation)
+data$Temperature <- capOutliers(data$Temperature)
+data$Pressure <- capOutliers(data$Pressure)
+data$Humidity <- capOutliers(data$Humidity)
+data$Speed <- capOutliers(data$Speed)
+
+# scale values
+scale01 <- function(x) {
+  maxs <- max(x)
+  mins <- min(x)
+  scale(x, center = mins, scale = maxs - mins)
+}
+
+data$Temperature <- scale01(data$Temperature)
+data$Pressure <- scale01(data$Pressure)
+data$Humidity <- scale01(data$Humidity)
+data$Speed <- scale01(data$Speed)
+```
+
+# Training, validation, and test set
+```{r}
+sets <- sample(c("training", "validation", "test"), nrow(data), replace = TRUE, prob = (c(0.6, 0.2, 0.2)))
+samples <- cbind(data, sets)
+training <- subset(samples, sets == "training", select = -c(sets))
+validation <- subset(samples, sets == "validation", select = -c(sets))
+test <- subset(samples, sets == "test", select = -c(sets))
+```
